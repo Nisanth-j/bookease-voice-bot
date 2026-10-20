@@ -16,6 +16,7 @@ button{padding:10px 18px;border:0;border-radius:8px;font-size:15px;cursor:pointe
 <div class="card">
  <div class="row">
   <label>Language <select id="lang"><option value="en">English</option><option value="hi">Hindi</option><option value="te">Telugu</option><option value="ta">Tamil</option></select></label>
+  <label>Voice <select id="voice"></select></label>
   <label><input type="checkbox" id="consent"> I consent to this call being recorded</label>
  </div>
  <div class="row" style="margin-top:10px">
@@ -31,6 +32,7 @@ button{padding:10px 18px;border:0;border-radius:8px;font-size:15px;cursor:pointe
 <script>
 const STATUSES=["Converted","Interested","Follow-up Required","Not Interested","Demo Requested","No Response"];
 const LANGS={en:["en-IN","English"],hi:["hi-IN","Hindi"],te:["te-IN","Telugu"],ta:["ta-IN","Tamil"]};
+const FEM=/female|neerja|heera|swara|kalpana|pallavi|shruti|zira|samantha|veena|lekha|google/i;
 const GREET={
 en:"Hello! This is Riya from BookEasy. Do you have a minute to hear how we can make your appointment booking easier?",
 hi:"नमस्ते! मैं BookEasy से रिया बोल रही हूँ। क्या आपके पास एक मिनट है? मैं बताना चाहती हूँ कि हम आपकी अपॉइंटमेंट बुकिंग कैसे आसान बनाते हैं।",
@@ -55,8 +57,21 @@ async function ask(system,messages,json){
  const r=await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({system,messages,json})});
  const d=await r.json();if(!r.ok)throw new Error(d.error||"API error");return d.text}
 
+function fillVoices(){
+ const lang=$("lang").value;
+ const vs=speechSynthesis.getVoices().filter(v=>v.lang.replace("_","-").toLowerCase().startsWith(lang));
+ const sel=$("voice");sel.innerHTML="";
+ vs.forEach(v=>{const o=document.createElement("option");o.value=v.name;o.textContent=v.name;sel.appendChild(o)});
+ const f=vs.find(v=>FEM.test(v.name));if(f)sel.value=f.name}
+speechSynthesis.onvoiceschanged=fillVoices;
+$("lang").onchange=fillVoices;
+
 function add(c,role,text){c.msgs.push({role,text});const d=document.createElement("div");d.className="m "+role;d.textContent=(role==="bot"?"Riya: ":"You: ")+text;$("chat").appendChild(d);$("chat").scrollTop=1e9}
-function speak(text,lang){return new Promise(ok=>{speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(text);u.lang=LANGS[lang][0];u.onend=ok;u.onerror=ok;speechSynthesis.speak(u)})}
+function speak(text,lang){return new Promise(ok=>{
+ speechSynthesis.cancel();
+ const u=new SpeechSynthesisUtterance(text);u.lang=LANGS[lang][0];
+ const v=speechSynthesis.getVoices().find(v=>v.name===$("voice").value);if(v)u.voice=v;
+ u.onend=ok;u.onerror=ok;speechSynthesis.speak(u)})}
 function listen(c){return new Promise(ok=>{const SR=window.SpeechRecognition||window.webkitSpeechRecognition;if(!SR){alert("Please use Google Chrome.");return ok("")}
  const r=new SR();r.lang=LANGS[c.lang][0];r.interimResults=false;let got="";
  r.onresult=e=>{got=e.results[0][0].transcript};r.onend=()=>{c.rec=null;ok(got)};r.onerror=()=>{};
@@ -131,4 +146,5 @@ async function renderHistory(){
  if(!list.length)h.textContent="No calls yet.";
  list.forEach(c=>h.appendChild(card(c)))}
 renderHistory();
+fillVoices();
 </script></body></html>
