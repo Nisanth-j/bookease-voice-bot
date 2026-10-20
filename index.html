@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BookEasy AI Voice Sales Bot</title>
+<style>
+body{font-family:system-ui,sans-serif;max-width:900px;margin:0 auto;padding:16px;background:#f5f6fa;color:#222}
+h1{font-size:22px}.card{background:#fff;border-radius:10px;padding:14px;margin-bottom:14px;box-shadow:0 1px 3px #0002}
+button{padding:10px 18px;border:0;border-radius:8px;font-size:15px;cursor:pointer;color:#fff}
+#start{background:#16a34a}#end{background:#dc2626}button:disabled{opacity:.4;cursor:not-allowed}
+#chat{height:300px;overflow-y:auto;border:1px solid #ddd;border-radius:8px;padding:8px;background:#fafafa}
+.m{margin:6px 0;padding:8px 10px;border-radius:8px;max-width:80%}
+.bot{background:#e0e7ff}.cust{background:#dcfce7;margin-left:auto}
+.badge{display:inline-block;padding:3px 10px;border-radius:12px;background:#e5e7eb;font-size:13px}
+.row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+</style></head><body>
+<h1>BookEasy AI Voice Sales Bot</h1>
+<div class="card">
+ <div class="row">
+  <label>Language <select id="lang"><option value="en">English</option><option value="hi">Hindi</option><option value="te">Telugu</option><option value="ta">Tamil</option></select></label>
+  <label><input type="checkbox" id="consent"> I consent to this call being recorded</label>
+ </div>
+ <div class="row" style="margin-top:10px">
+  <button id="start" onclick="startCall()">Start Call</button>
+  <button id="end" onclick="endCall()" disabled>End Call</button>
+  <span>Duration: <b id="time">00:00</b></span>
+  <span>Status: <span class="badge" id="status">Idle</span></span>
+ </div>
+</div>
+<div class="card"><b>Live Chat</b><div id="chat"></div></div>
+<div id="result"></div>
+<h2>Call History</h2><div id="history"></div>
+<script>
+const STATUSES=["Converted","Interested","Follow-up Required","Not Interested","Demo Requested","No Response"];
+const LANGS={en:["en-IN","English"],hi:["hi-IN","Hindi"],te:["te-IN","Telugu"],ta:["ta-IN","Tamil"]};
+const GREET={
+en:"Hello! This is Riya from BookEasy. Do you have a minute to hear how we can make your appointment booking easier?",
+hi:"नमस्ते! मैं BookEasy से रिया बोल रही हूँ। क्या आपके पास एक मिनट है? मैं बताना चाहती हूँ कि हम आपकी अपॉइंटमेंट बुकिंग कैसे आसान बनाते हैं।",
+te:"నమస్కారం! నేను BookEasy నుండి రియా మాట్లాడుతున్నాను. మీకు ఒక నిమిషం సమయం ఉందా? అపాయింట్‌మెంట్ బుకింగ్‌ను మేము ఎలా సులభం చేస్తామో చెబుతాను.",
+ta:"வணக்கம்! நான் BookEasy நிறுவனத்திலிருந்து ரியா பேசுகிறேன். உங்களுக்கு ஒரு நிமிடம் நேரம் இருக்கிறதா? அப்பாயிண்ட்மென்ட் முன்பதிவை நாங்கள் எப்படி எளிதாக்குகிறோம் என்பதை சொல்கிறேன்."};
+const PROMPT={en:"Are you still there?",hi:"क्या आप वहाँ हैं?",te:"మీరు ఇంకా ఉన్నారా?",ta:"நீங்கள் இன்னும் இருக்கிறீர்களா?"};
+const SYSTEM=lang=>`You are Riya, a friendly sales agent on a live phone call, selling BookEasy.
+BookEasy is a booking and scheduling app for small salons and clinics. Features: online appointment booking, automatic WhatsApp reminders (fewer no-shows), and a payments dashboard. Price: Rs 999 per month. A free demo is available.
+Rules: speak only in ${LANGS[lang][1]} (use its native script). Keep every reply to 1-3 short spoken sentences. No markdown, no lists, no emojis. Ask about the customer's business and needs, answer questions honestly, handle objections politely, and try to close: get them to sign up or book a free demo. If they say no firmly, thank them and end politely. Never invent features or prices beyond those above.`;
+const SUMMARY_SYS=`You analyse a sales call transcript for BookEasy. Reply ONLY with JSON with these string keys: "summary", "requirements", "objections", "next_steps", "status". Write in English. "status" must be exactly one of: ${STATUSES.join(", ")}. Use Converted only if the customer clearly agreed to buy; Demo Requested if they asked for a demo; Interested if positive but undecided; Follow-up Required if they asked to be called later; Not Interested if they refused.`;
+
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const setStatus=t=>$("status").textContent=t;
+let call=null;
+
+function db(){return new Promise((ok,no)=>{const r=indexedDB.open("salesbot",1);r.onupgradeneeded=()=>r.result.createObjectStore("calls",{keyPath:"id"});r.onsuccess=()=>ok(r.result);r.onerror=()=>no(r.error)})}
+async function saveCall(c){const d=await db();return new Promise((ok,no)=>{const t=d.transaction("calls","readwrite");t.objectStore("calls").put(c);t.oncomplete=ok;t.onerror=()=>no(t.error)})}
+async function allCalls(){const d=await db();return new Promise((ok,no)=>{const r=d.transaction("calls").objectStore("calls").getAll();r.onsuccess=()=>ok(r.result);r.onerror=()=>no(r.error)})}
+
+async function ask(system,messages,json){
+ const r=await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({system,messages,json})});
+ const d=await r.json();if(!r.ok)throw new Error(d.error||"API error");return d.text}
+
+function add(c,role,text){c.msgs.push({role,text});const d=document.createElement("div");d.className="m "+role;d.textContent=(role==="bot"?"Riya: ":"You: ")+text;$("chat").appendChild(d);$("chat").scrollTop=1e9}
+function speak(text,lang){return new Promise(ok=>{speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(text);u.lang=LANGS[lang][0];u.onend=ok;u.onerror=ok;speechSynthesis.speak(u)})}
+function listen(c){return new Promise(ok=>{const SR=window.SpeechRecognition||window.webkitSpeechRecognition;if(!SR){alert("Please use Google Chrome.");return ok("")}
+ const r=new SR();r.lang=LANGS[c.lang][0];r.interimResults=false;let got="";
+ r.onresult=e=>{got=e.results[0][0].transcript};r.onend=()=>{c.rec=null;ok(got)};r.onerror=()=>{};
+ c.rec=r;try{r.start()}catch(e){ok("")}})}
+
+async function loop(c){
+ let silent=0;
+ while(!c.ended){
+  setStatus("Listening...");
+  const t=await listen(c);
+  if(c.ended)break;
+  if(!t.trim()){
+   silent++;
+   if(silent>=3){await endCall();break}
+   if(silent===2){const p=PROMPT[c.lang];add(c,"bot",p);await speak(p,c.lang)}
+   continue}
+  silent=0;add(c,"cust",t);setStatus("Thinking...");
+  try{
+   const reply=await ask(SYSTEM(c.lang),[{role:"user",text:"(Call connected)"},...c.msgs.map(m=>({role:m.role==="bot"?"assistant":"user",text:m.text}))]);
+   if(c.ended)break;
+   add(c,"bot",reply);setStatus("Speaking...");await speak(reply,c.lang);
+  }catch(e){add(c,"bot","(Error: "+e.message+")");await new Promise(r=>setTimeout(r,1500))}
+ }}
+
+async function startCall(){
+ if(!$("consent").checked)return alert("Please tick the recording consent box first.");
+ let stream;try{stream=await navigator.mediaDevices.getUserMedia({audio:true})}catch(e){return alert("Microphone access is needed.")}
+ const lang=$("lang").value;
+ const c=call={lang,msgs:[],start:Date.now(),chunks:[],ended:false,stream};
+ $("chat").innerHTML="";$("result").innerHTML="";$("time").textContent="00:00";
+ const mr=new MediaRecorder(stream);mr.ondataavailable=e=>e.data.size&&c.chunks.push(e.data);mr.start();c.mr=mr;
+ $("start").disabled=true;$("end").disabled=false;$("lang").disabled=true;
+ c.timer=setInterval(()=>{const s=Math.floor((Date.now()-c.start)/1000);$("time").textContent=String(Math.floor(s/60)).padStart(2,"0")+":"+String(s%60).padStart(2,"0")},500);
+ setStatus("Connected");
+ const g=GREET[lang];add(c,"bot",g);setStatus("Speaking...");await speak(g,lang);
+ if(!c.ended)loop(c);
+}
+
+async function endCall(){
+ const c=call;if(!c||c.ended)return;c.ended=true;call=null;
+ speechSynthesis.cancel();try{c.rec&&c.rec.abort()}catch(e){}
+ clearInterval(c.timer);$("end").disabled=true;setStatus("Processing...");
+ const duration=Math.floor((Date.now()-c.start)/1000);
+ const audio=await new Promise(ok=>{c.mr.onstop=()=>ok(new Blob(c.chunks,{type:c.mr.mimeType||"audio/webm"}));c.mr.stop()});
+ c.stream.getTracks().forEach(t=>t.stop());
+ let summary={summary:"The customer did not respond during the call.",requirements:"None",objections:"None",next_steps:"Try calling again later."},status="No Response";
+ if(c.msgs.some(m=>m.role==="cust")){
+  try{
+   const out=await ask(SUMMARY_SYS,[{role:"user",text:c.msgs.map(m=>(m.role==="bot"?"Agent: ":"Customer: ")+m.text).join("\n")}],true);
+   const j=JSON.parse(out.replace(/```json|```/g,"").trim());
+   summary={summary:j.summary,requirements:j.requirements,objections:j.objections,next_steps:j.next_steps};
+   status=STATUSES.includes(j.status)?j.status:"Follow-up Required";
+  }catch(e){summary={summary:"Summary could not be generated.",requirements:"-",objections:"-",next_steps:"-"};status="Follow-up Required"}
+ }
+ const rec={id:c.start,lang:c.lang,duration,msgs:c.msgs,summary,status,audio};
+ try{await saveCall(rec)}catch(e){}
+ $("result").innerHTML="";$("result").appendChild(card(rec));
+ setStatus("Ended");$("start").disabled=false;$("lang").disabled=false;
+ renderHistory();
+}
+
+function card(c){
+ const d=document.createElement("div");d.className="card";const s=c.summary;
+ d.innerHTML=`<div class="row"><b>${new Date(c.id).toLocaleString()}</b><span>${c.duration}s</span><span>${LANGS[c.lang][1]}</span><span class="badge">Sales status: ${esc(c.status)}</span></div>
+ <p><b>Summary:</b> ${esc(s.summary)}</p><p><b>Requirements:</b> ${esc(s.requirements)}</p><p><b>Objections:</b> ${esc(s.objections)}</p><p><b>Next steps:</b> ${esc(s.next_steps)}</p>
+ <audio controls src="${URL.createObjectURL(c.audio)}" style="width:100%"></audio>
+ <details><summary>Transcript</summary>${c.msgs.map(m=>`<p><b>${m.role==="bot"?"Riya":"Customer"}:</b> ${esc(m.text)}</p>`).join("")}</details>`;
+ return d}
+
+async function renderHistory(){
+ const list=(await allCalls()).sort((a,b)=>b.id-a.id);const h=$("history");h.innerHTML="";
+ if(!list.length)h.textContent="No calls yet.";
+ list.forEach(c=>h.appendChild(card(c)))}
+renderHistory();
+</script></body></html>
